@@ -451,7 +451,7 @@ class MaterialsDesktopTests(unittest.TestCase):
             self.assertIn("模板无效", page)
 
     def test_template_directory_is_saved_as_absolute_path_and_survives_cwd_change(self):
-        with TemporaryDirectory() as directory:
+        with TemporaryDirectory(dir=Path.cwd()) as directory:
             root = Path(directory)
             templates = root / "templates"
             templates.mkdir()

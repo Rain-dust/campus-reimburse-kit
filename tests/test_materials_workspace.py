@@ -107,8 +107,8 @@ class MaterialsWorkspaceTests(unittest.TestCase):
             validation = validate_template_directory(templates)
 
             self.assertTrue(validation.valid)
-            self.assertEqual(validation.inbound_path, templates / "入库单_模板.xlsx")
-            self.assertEqual(validation.outbound_path, templates / "出库单_模板.xlsx")
+            self.assertEqual(validation.inbound_path, (templates / "入库单_模板.xlsx").resolve())
+            self.assertEqual(validation.outbound_path, (templates / "出库单_模板.xlsx").resolve())
             self.assertEqual(validation.errors, ())
 
     def test_template_validation_accepts_official_short_specification_headers(self):
@@ -437,7 +437,7 @@ class MaterialsWorkspaceTests(unittest.TestCase):
             result = export_quota_package(workspace_dir, state, "quota-1")
 
             package_dir = workspace_dir / "exports" / "quota-1-100.00"
-            self.assertEqual(result, ExportResult(package_dir, "quota-1", 10_000))
+            self.assertEqual(result, ExportResult(package_dir.resolve(), "quota-1", 10_000))
             self.assertEqual(
                 {path.name for path in package_dir.iterdir()},
                 {"入库单.xlsx", "出库单.xlsx", "原始票据"},
@@ -539,7 +539,7 @@ class MaterialsWorkspaceTests(unittest.TestCase):
             save_workspace(workspace_dir, state)
             loaded = load_workspace(workspace_dir)
 
-            self.assertEqual(workspace_dir.parent, root / "workspaces")
+            self.assertEqual(workspace_dir.parent, (root / "workspaces").resolve())
             self.assertTrue((workspace_dir / "workspace.json").is_file())
             for directory_name in ("imports", "records", "exports", "backups"):
                 self.assertTrue((workspace_dir / directory_name).is_dir())
@@ -620,7 +620,7 @@ class MaterialsWorkspaceTests(unittest.TestCase):
             workspace_dir, state = create_workspace(root, "../unsafe name!?")
             fallback_dir, fallback_state = create_workspace(root, "")
 
-            self.assertEqual(workspace_dir.parent, root / "workspaces")
+            self.assertEqual(workspace_dir.parent, (root / "workspaces").resolve())
             self.assertNotIn("..", workspace_dir.name)
             self.assertRegex(workspace_dir.name, r"^[A-Za-z0-9_-]+$")
             self.assertTrue(fallback_dir.name.startswith("materials-"))
@@ -759,7 +759,7 @@ class MaterialsWorkspaceTests(unittest.TestCase):
 
             self.assertEqual(load_workspace(restored)["name"], "Project Alpha")
             self.assertEqual((restored / "imports" / "receipt.pdf").read_bytes(), b"receipt")
-            self.assertEqual(restored.parent, Path(restore_directory) / "workspaces")
+            self.assertEqual(restored.parent, (Path(restore_directory) / "workspaces").resolve())
             with ZipFile(archive) as backup:
                 self.assertNotIn("backups/old-backup.zip", backup.namelist())
                 self.assertTrue(
