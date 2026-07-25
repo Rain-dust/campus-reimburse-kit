@@ -23,22 +23,22 @@ jobs:
       - run: python -m compileall app core tools materials_desktop.py run_materials_desktop.py
       - name: Test inventory line extraction
         if: always()
-        run: python tools/run_ci_suite.py test_inventory_line_extraction.py
+        run: python -m unittest discover -s tests -p "test_inventory_line_extraction.py" -v
       - name: Test local OCR assets
         if: always()
-        run: python tools/run_ci_suite.py test_local_ocr_assets.py
+        run: python -m unittest discover -s tests -p "test_local_ocr_assets.py" -v
       - name: Test local OCR worker
         if: always()
-        run: python tools/run_ci_suite.py test_local_ocr_worker.py
+        run: python -m unittest discover -s tests -p "test_local_ocr_worker.py" -v
       - name: Test materials assistant
         if: always()
-        run: python tools/run_ci_suite.py test_materials_assistant.py
+        run: python -m unittest discover -s tests -p "test_materials_assistant.py" -v
       - name: Test desktop routes
         if: always()
-        run: python tools/run_ci_suite.py test_materials_desktop.py
+        run: python -m unittest discover -s tests -p "test_materials_desktop.py" -v
       - name: Test workspace storage
         if: always()
-        run: python tools/run_ci_suite.py test_materials_workspace.py
+        run: python -m unittest discover -s tests -p "test_materials_workspace.py" -v
       - name: Test OCR providers
         if: always()
-        run: python tools/run_ci_suite.py test_ocr_providers.py
+        run: python -m unittest discover -s tests -p "test_ocr_providers.py" -v
