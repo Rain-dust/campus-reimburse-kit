@@ -324,7 +324,9 @@ class MaterialsDesktopTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 302)
             self.assertTrue(response.headers["Location"].endswith("/step/2"))
-            self.assertEqual(Path(saved["template_dir"]), workspace_dir / "templates")
+            self.assertTrue(
+                Path(saved["template_dir"]).samefile(workspace_dir / "templates")
+            )
             self.assertTrue((workspace_dir / "templates" / "入库单.xlsx").is_file())
             self.assertTrue((workspace_dir / "templates" / "出库单.xlsx").is_file())
 

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 私下报告安全漏洞
+    url: https://github.com/Rain-dust/campus-reimburse-kit/security/advisories/new
+    about: 路径穿越、数据泄露、恶意文件或代码执行问题请勿公开提交。
