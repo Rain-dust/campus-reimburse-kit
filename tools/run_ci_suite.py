@@ -35,10 +35,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if os.environ.get("GITHUB_ACTIONS") == "true":
-        tail = "\n".join(report.splitlines()[-80:])
+        details = []
+        for test, traceback in (*result.failures, *result.errors):
+            details.append(f"{test.id()}\n{traceback}")
+        if result.unexpectedSuccesses:
+            details.append(
+                "unexpected successes:\n"
+                + "\n".join(test.id() for test in result.unexpectedSuccesses)
+            )
+        failure_report = "\n\n".join(details) or report
         print(
             f"::error title={_escape_workflow_command(pattern)} failed::"
-            f"{_escape_workflow_command(tail)}"
+            f"{_escape_workflow_command(failure_report[:12000])}"
         )
     return 1
 

@@ -104,7 +104,7 @@ class LocalOcrAssetsTests(unittest.TestCase):
             self.assertIsNotNone(prepare_local_ocr_assets)
             prepared = prepare_local_ocr_assets(source, target)
 
-            self.assertEqual(prepared, target)
+            self.assertEqual(prepared, target.resolve())
             self.assertTrue(has_required_models(target))
             self.assertFalse((target / "unexpected").exists())
 
