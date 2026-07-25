@@ -1,0 +1,124 @@
+{% extends "materials/base.html" %}
+{% block title %}{{ state.name or '材料工作区' }} - 大创报销材料助手{% endblock %}
+{% block content %}
+  <nav class="steps">
+    {% for title in steps %}
+      <a class="step {% if loop.index == step %}active{% endif %}" href="{{ url_for('wizard_step', workspace_id=workspace_id, step=loop.index) }}">{{ loop.index }}. {{ title }}</a>
+    {% endfor %}
+  </nav>
+  <section class="card"><a class="button" href="{{ url_for('download_workspace_backup', workspace_id=workspace_id) }}">下载当前工作区备份</a></section>
+  <section class="card">
+    <strong>下一步：</strong>{{ next_action }}
+    {% if blocking_errors %}<ul>{% for error in blocking_errors %}<li>{{ error }}</li>{% endfor %}</ul>{% endif %}
+  </section>
+
+  {% if step == 1 %}
+    <section class="card">
+      <h2>已使用内嵌模板</h2>
+      <p>官方入库单和出库单已随程序提供，无需上传模板。请直接导入原始票据。</p>
+      <a class="button" href="{{ url_for('wizard_step', workspace_id=workspace_id, step=2) }}">导入票据</a>
+    </section>
+  {% elif step == 2 %}
+    <section class="card">
+      <h2>导入票据</h2>
+      <form method="post" action="{{ url_for('import_receipts', workspace_id=workspace_id) }}" enctype="multipart/form-data">
+        <input id="receipt-files" type="file" name="receipts" multiple accept=".pdf">
+        <button>导入本地票据</button>
+      </form>
+      <p id="receipt-file-status" class="muted">请选择 PDF 发票，可一次选多份，也可从不同文件夹分批导入；后续批次不会覆盖已有票据。</p>
+      <script>
+        document.getElementById('receipt-files').addEventListener('change', function () {
+          var count = this.files.length;
+          document.getElementById('receipt-file-status').textContent = count
+            ? '已选择 ' + count + ' 份票据：' + Array.prototype.map.call(this.files, function (file) { return file.name; }).join('、')
+            : '还未选择票据。';
+        });
+      </script>
+    </section>
+  {% elif step == 3 %}
+    <section class="card">
+      <h2>确认票据</h2>
+      {% if state.receipts %}
+        <form id="confirm-all-form" method="post" action="{{ url_for('confirm_all_receipts', workspace_id=workspace_id) }}"></form>
+        <div class="receipt-toolbar">
+          <button form="confirm-all-form" type="submit">确认全部票据</button>
+          <a class="button secondary" href="{{ url_for('wizard_step', workspace_id=workspace_id, step=2) }}">继续导入更多 PDF</a>
+          <span class="muted">确认前请核对日期、价税合计、供应商和发票号。</span>
+        </div>
+        <div class="table-scroll">
+        <table class="receipt-table">
+          <colgroup><col class="receipt-source"><col class="receipt-date"><col class="receipt-amount"><col class="receipt-vendor"><col class="receipt-invoice"><col class="receipt-material"><col class="receipt-action"></colgroup>
+          <tr><th>文件与识别文本</th><th>日期</th><th>金额</th><th>供应商</th><th>发票号</th><th>材料</th><th>操作</th></tr>
+          {% for receipt in state.receipts %}
+            <tr>
+              <td class="receipt-source"><span class="receipt-status {{ 'confirmed' if receipt.confirmed else 'pending' }}">{{ '已确认' if receipt.confirmed else '待确认' }}</span> {{ receipt_display_name(receipt, loop.index) }} <a href="{{ url_for('receipt_source', workspace_id=workspace_id, receipt_id=receipt.receipt_id) }}">查看原始票据</a><details><summary>OCR 识别文本</summary><pre>{{ receipt.ocr_text or '无识别文本' }}</pre></details></td>
+              <td><input type="date" name="date-{{ receipt.receipt_id }}" form="confirm-all-form" value="{{ receipt.date or receipt.invoice_date or '' }}"></td>
+              <td><input name="total-{{ receipt.receipt_id }}" form="confirm-all-form" value="{{ receipt.total or ('%.2f'|format(receipt.total_cents / 100) if receipt.total_cents else '') }}"></td>
+              <td><input name="vendor-{{ receipt.receipt_id }}" form="confirm-all-form" value="{{ receipt.vendor or receipt.vendor_name }}"></td>
+              <td><input name="invoice-{{ receipt.receipt_id }}" form="confirm-all-form" value="{{ receipt.invoice or receipt.invoice_number }}"></td>
+              <td><input type="checkbox" name="is_material-{{ receipt.receipt_id }}" form="confirm-all-form" {% if receipt.is_material %}checked{% endif %}></td>
+              <td class="receipt-actions"><button form="confirm-all-form" formaction="{{ url_for('confirm_receipt', workspace_id=workspace_id, receipt_id=receipt.receipt_id) }}" type="submit">确认此张</button><form method="post" action="{{ url_for('delete_receipt', workspace_id=workspace_id, receipt_id=receipt.receipt_id) }}"><button class="danger" type="submit" onclick="return confirm('确认删除这张票据吗？')">删除</button></form></td>
+            </tr>
+          {% endfor %}
+        </table>
+        </div>
+      {% else %}
+        <p class="muted">尚未导入票据。</p>
+      {% endif %}
+    </section>
+  {% elif step == 4 %}
+    <section class="card">
+      <h2>设置额度</h2>
+      <form method="post" action="{{ url_for('add_quota', workspace_id=workspace_id) }}">
+        <input name="label" placeholder="额度名称"><input name="capacity" placeholder="金额，例如 1500.00"><button>新增额度</button>
+      </form>
+      {% if state.quotas %}
+        <p class="muted">名称或余额填错时可直接修改；额度不能低于已分配票据的合计金额。</p>
+        {% for quota in state.quotas %}
+          <form id="quota-form-{{ quota.slot_id }}" method="post" action="{{ url_for('update_quota', workspace_id=workspace_id, slot_id=quota.slot_id) }}"></form>
+        {% endfor %}
+        <div class="table-scroll">
+          <table class="quota-table">
+            <tr><th>名称</th><th>额度</th><th>操作</th></tr>
+            {% for quota in state.quotas %}
+              {% set form_id = 'quota-form-' ~ quota.slot_id %}
+              <tr>
+                <td><input name="label" form="{{ form_id }}" value="{{ quota.label }}"></td>
+                <td><input name="capacity" form="{{ form_id }}" inputmode="decimal" value="{{ '%.2f'|format(quota.capacity_cents / 100) }}"></td>
+                <td class="quota-actions">
+                  <button form="{{ form_id }}">更新额度</button>
+                  <a class="button" href="{{ url_for('wizard_step', workspace_id=workspace_id, step=5) }}">分配票据</a>
+                  <form method="post" action="{{ url_for('delete_quota', workspace_id=workspace_id, slot_id=quota.slot_id) }}">
+                    <button class="danger" type="submit" onclick="return confirm('删除该额度和对应明细？原票据会保留，可重新分配。')">删除额度</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </table>
+        </div>
+      {% endif %}
+    </section>
+  {% elif step == 5 %}
+    <section class="card">
+      <h2>填写入出库明细</h2>
+      {% if state.quotas %}<form method="post" action="{{ url_for('auto_assign_receipts', workspace_id=workspace_id) }}"><button>自动分配已确认票据</button></form><p class="muted">只有商品唯一、数量明确且数量×含税单价与价税合计一致时，程序才自动填满并标记“已校验”。无法严格核验时仅填写日期、供应商和价税合计，其余字段留空供人工核对；空白项会阻止导出。</p>{% endif %}
+      {% for quota in state.quotas %}
+        <h3>{{ quota.label or quota.slot_id }}</h3>
+        <form method="post" action="{{ url_for('assign_receipts', workspace_id=workspace_id, slot_id=quota.slot_id) }}">{% for receipt in state.receipts %}<label><input type="checkbox" name="receipt_ids" value="{{ receipt.receipt_id }}" {% if receipt.receipt_id in quota.receipt_ids %}checked{% endif %}> {{ receipt_display_name(receipt, loop.index) }} ({{ '%.2f'|format((receipt.total_cents or 0) / 100) }})</label>{% endfor %}<button>保存票据分配</button></form>
+        <form method="post" action="{{ url_for('save_lines', workspace_id=workspace_id, slot_id=quota.slot_id) }}">
+          <div class="table-scroll"><table class="detail-table"><colgroup><col class="detail-date"><col class="detail-name"><col class="detail-specification"><col class="detail-unit"><col class="detail-quantity"><col class="detail-price"><col class="detail-amount"><col class="detail-supplier"></colgroup><tr><th>日期</th><th>名称</th><th>规格</th><th>单位</th><th>数量</th><th>单价</th><th>金额</th><th>供应商</th></tr>{% for line in state.lines_by_slot.get(quota.slot_id, []) %}<tr><td><input name="inventory_date" type="date" value="{{ line.inventory_date }}"></td><td>{% if line.recognition_status %}<span class="recognition {{ 'verified' if line.recognition_status == '已校验' else 'pending' }}">{{ line.recognition_status }}</span>{% endif %}<input name="name" value="{{ line.name }}"></td><td><input name="specification" value="{{ line.specification }}"></td><td><input name="unit" value="{{ line.unit }}"></td><td><input name="quantity" value="{{ line.quantity }}"></td><td><input name="unit_price" value="{{ line.unit_price }}"></td><td><input name="amount" value="{{ line.amount }}"></td><td><input name="supplier_name" value="{{ line.supplier_name }}"></td></tr>{% endfor %}<tr><td><input name="inventory_date" type="date"></td><td><input name="name"></td><td><input name="specification"></td><td><input name="unit"></td><td><input name="quantity"></td><td><input name="unit_price"></td><td><input name="amount"></td><td><input name="supplier_name"></td></tr></table></div>
+          <button>保存明细</button>
+        </form>
+      {% endfor %}
+      {% if not state.quotas %}<p class="muted">请先创建额度。</p>{% endif %}
+    </section>
+  {% else %}
+    <section class="card">
+      <h2>检查并导出</h2>
+      {% if state.quotas %}
+        <table><tr><th>额度</th><th>票据数量</th><th>票据合计</th><th>明细合计</th><th>额度余额</th><th>操作</th></tr>{% for quota in state.quotas %}{% set summary = quota_summaries[quota.slot_id] %}<tr><td>{{ quota.label or quota.slot_id }}</td><td>{{ summary.receipt_count }}</td><td>{{ '%.2f'|format(summary.receipt_total_cents / 100) }}</td><td>{{ '%.2f'|format(summary.line_total_cents / 100) }}</td><td>{{ '%.2f'|format(summary.remaining_cents / 100) }}</td><td><form method="post" action="{{ url_for('export_package', workspace_id=workspace_id, slot_id=quota.slot_id) }}"><button>生成材料包</button></form></td></tr><tr><td colspan="6">{% if preflight_errors[quota.slot_id] %}<ul>{% for error in preflight_errors[quota.slot_id] %}<li>{{ error }}</li>{% endfor %}</ul>{% else %}可以导出。{% endif %}</td></tr>{% endfor %}</table>
+      {% else %}<p class="muted">请先创建额度。</p>{% endif %}
+      {% if state.exports %}<h3>已生成材料包</h3><ul>{% for export in state.exports %}<li>{{ export.path }} <form method="post" action="{{ url_for('open_export', workspace_id=workspace_id, export_name=export.path.rsplit('/', 1)[-1]) }}"><button>打开目录</button></form></li>{% endfor %}</ul>{% endif %}
+    </section>
+  {% endif %}
+{% endblock %}

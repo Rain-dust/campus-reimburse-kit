@@ -1,0 +1,12 @@
+Campus Reimburse Kit
+Copyright 2026 Rain-dust
+
+This product includes modified portions of InvoiceOCR:
+https://github.com/chiupam/InvoiceOCR
+Copyright chiupam and InvoiceOCR contributors
+Licensed under the Apache License, Version 2.0.
+
+The bundled inventory workbooks currently preserve the supplied
+Xiangtan University form layout and example content. They are provided
+for compatibility with the current application workflow and are not
+claimed as a universal or officially maintained reimbursement standard.

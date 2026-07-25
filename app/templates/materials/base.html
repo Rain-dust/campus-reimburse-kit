@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}大创报销材料助手{% endblock %}</title>
+  <style>
+    :root { --ink:#17352d; --muted:#6a7972; --paper:#fffdf7; --accent:#216b52; --line:#dce5dc; --wash:#edf4ed; --workspace-context-height:44px; }
+    * { box-sizing:border-box; } body { margin:0; color:var(--ink); background:linear-gradient(135deg,#e9f1eb,#f8f1e5); font:15px "Microsoft YaHei",sans-serif; }
+    main { width:min(1120px,calc(100% - 32px)); margin:32px auto; } h1 { margin:0; font-size:32px; } h2 { margin-top:0; }
+    .card { margin:18px 0; padding:22px; background:var(--paper); border:1px solid #e7ebe0; border-radius:16px; box-shadow:0 12px 30px #18321512; }
+    .muted { color:var(--muted); } form { display:flex; gap:10px; align-items:center; flex-wrap:wrap; } input,select { padding:9px; border:1px solid var(--line); border-radius:8px; font:inherit; } button,.button { border:0; border-radius:8px; padding:10px 15px; color:#fff; background:var(--accent); font:inherit; cursor:pointer; text-decoration:none; }
+    .flash { padding:10px 12px; margin:10px 0; border-radius:8px; background:#fff1da; color:#744b16; } .workspace-context { position:sticky; top:0; z-index:3; min-height:var(--workspace-context-height); display:flex; align-items:center; padding:8px max(16px,calc((100% - 1120px) / 2)); color:#fff; background:var(--accent); box-shadow:0 2px 10px #17352d33; } .steps { position:sticky; top:var(--workspace-context-height); z-index:2; display:flex; gap:8px; flex-wrap:wrap; margin:14px 0; padding:8px 0; background:#eef3eccc; backdrop-filter:blur(8px); } .step { padding:7px 10px; border-radius:99px; background:#fff9; color:var(--muted); text-decoration:none; } .step.active { background:var(--accent); color:#fff; }
+    table { width:100%; border-collapse:collapse; margin-top:14px; } th,td { padding:9px; text-align:left; vertical-align:top; border-bottom:1px solid var(--line); } code { word-break:break-all; } pre { max-width:100%; max-height:140px; overflow:auto; white-space:pre-wrap; } .actions { display:flex; gap:8px; flex-wrap:wrap; }
+    .table-scroll { width:100%; overflow-x:auto; } .receipt-toolbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:12px; } .button.secondary { color:var(--accent); background:#e2eee7; } .receipt-status { display:inline-block; margin:0 4px 5px 0; padding:2px 7px; border-radius:99px; font-size:12px; white-space:nowrap; } .receipt-status.confirmed { color:#155c45; background:#dcefe4; } .receipt-status.pending { color:#80520f; background:#fff0cf; } .receipt-table { min-width:900px; table-layout:fixed; } .receipt-table th,.receipt-table td { overflow-wrap:anywhere; } .receipt-table th:last-child,.receipt-table td:last-child { position:sticky; right:0; z-index:1; background:var(--paper); box-shadow:-8px 0 12px #17352d12; } .receipt-table th:last-child { z-index:2; } .receipt-table input:not([type="checkbox"]) { width:100%; min-width:0; } .receipt-table col.receipt-source { width:22%; } .receipt-table col.receipt-date { width:13%; } .receipt-table col.receipt-amount { width:10%; } .receipt-table col.receipt-vendor { width:18%; } .receipt-table col.receipt-invoice { width:17%; } .receipt-table col.receipt-material { width:6%; } .receipt-table col.receipt-action { width:14%; } .receipt-actions { display:grid; gap:8px; } .receipt-actions form { display:block; } .receipt-actions button { width:100%; } .danger { background:#a64536; }
+    .detail-table { min-width:980px; table-layout:fixed; } .detail-table input { width:100%; min-width:0; } .detail-table col.detail-date { width:12%; } .detail-table col.detail-name { width:17%; } .detail-table col.detail-specification { width:15%; } .detail-table col.detail-unit { width:8%; } .detail-table col.detail-quantity { width:9%; } .detail-table col.detail-price { width:10%; } .detail-table col.detail-amount { width:10%; } .detail-table col.detail-supplier { width:19%; }
+    .quota-table { min-width:680px; table-layout:fixed; } .quota-table th:nth-child(1),.quota-table td:nth-child(1) { width:32%; } .quota-table th:nth-child(2),.quota-table td:nth-child(2) { width:23%; } .quota-table input { width:100%; min-width:0; } .quota-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; } .quota-actions form { display:inline-flex; }
+    .recognition { display:inline-block; margin:0 0 5px; padding:2px 6px; border-radius:99px; font-size:12px; } .recognition.verified { color:#155c45; background:#dcefe4; } .recognition.pending { color:#80520f; background:#fff0cf; }
+    @media (max-width:700px) { main { width:min(100% - 20px,1120px); margin:18px auto; } .card { padding:15px; } h1 { font-size:26px; } .receipt-table { min-width:820px; } }
+  </style>
+</head>
+<body>
+  {% if workspace_name %}<header class="workspace-context">当前工作区：{{ workspace_name }}</header>{% endif %}
+  <main>
+    <h1>大创报销材料助手</h1>
+    <p class="muted">所有票据、模板路径和导出文件仅保存在本机。</p>
+    {% with messages = get_flashed_messages() %}{% for message in messages %}<p class="flash">{{ message }}</p>{% endfor %}{% endwith %}
+    {% block content %}
+      <section class="card"><h2>创建工作区</h2><form method="post" action="{{ url_for('new_workspace') }}"><input name="name" placeholder="项目名称"><button>开始六步向导</button></form></section>
+      <section class="card"><h2>恢复工作区备份</h2><form method="post" action="{{ url_for('restore_workspace') }}" enctype="multipart/form-data"><input type="file" name="backup" accept=".zip"><button>恢复备份</button></form></section>
+      {% if workspaces %}<section class="card"><h2>已有工作区</h2><table><tr><th>工作区</th><th>操作</th></tr>{% for workspace in workspaces %}<tr><td><strong>{{ workspace.name }}</strong>{% if workspace.error %}<div class="muted">{{ workspace.error }}</div>{% endif %}</td><td class="actions">{% if not workspace.error %}<a class="button" href="{{ url_for('wizard_step', workspace_id=workspace.id, step=1) }}">继续</a><a class="button" href="{{ url_for('download_workspace_backup', workspace_id=workspace.id) }}">下载备份</a>{% endif %}<form method="post" action="{{ url_for('delete_workspace', workspace_id=workspace.id) }}"><button class="danger" type="submit" onclick="return confirm('删除该工作区及其中票据、导出文件和备份？该操作无法恢复。')">删除工作区</button></form></td></tr>{% endfor %}</table></section>{% endif %}
+    {% endblock %}
+  </main>
+</body>
+</html>
