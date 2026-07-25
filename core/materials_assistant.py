@@ -219,12 +219,12 @@ def extract_pdf_text_boxes(source_path: str | Path) -> list[TextBox]:
 def _pdf_reader_types():
     """Return an available PDF reader without requiring both package names."""
     try:
-        from PyPDF2 import PdfReader
-        from PyPDF2.errors import PdfReadError
+        from pypdf import PdfReader
+        from pypdf.errors import PdfReadError
     except ImportError:
         try:
-            from pypdf import PdfReader
-            from pypdf.errors import PdfReadError
+            from PyPDF2 import PdfReader
+            from PyPDF2.errors import PdfReadError
         except ImportError:
             return None, ()
     return PdfReader, (PdfReadError,)

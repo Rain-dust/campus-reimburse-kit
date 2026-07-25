@@ -1,4 +1,4 @@
 Flask>=2.3,<4
 Werkzeug>=2.3,<4
 openpyxl>=3.1,<4
-PyPDF2>=3.0,<4
+pypdf>=3.9,<7
