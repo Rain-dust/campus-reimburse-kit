@@ -36,6 +36,7 @@ from core.materials_workspace import (
     create_workspace,
     export_workspace_backup,
     export_quota_package,
+    install_workspace_templates,
     load_workspace,
     migrate_legacy_workspace,
     package_preflight,
@@ -50,7 +51,9 @@ from core.materials_workspace import (
 ALLOWED = {".pdf"}
 WIZARD_STEPS = ("选择模板", "导入票据", "确认票据", "设置额度", "填写入出库明细", "检查并导出")
 MAX_RECEIPT_BYTES = 25 * 1024 * 1024
+MAX_TEMPLATE_BYTES = 10 * 1024 * 1024
 MAX_REQUEST_BYTES = 300 * 1024 * 1024
+MAX_WORKSPACE_NAME_LENGTH = 80
 
 
 def default_home() -> Path:
@@ -74,6 +77,7 @@ def create_materials_app(home: str | Path | None = None) -> Flask:
         MATERIALS_OFFLINE_OCR=not bundled_models_available,
         MATERIALS_TEMPLATE_DIR=bundled_templates,
         MAX_RECEIPT_BYTES=MAX_RECEIPT_BYTES,
+        MAX_TEMPLATE_BYTES=MAX_TEMPLATE_BYTES,
         MAX_CONTENT_LENGTH=MAX_REQUEST_BYTES,
     )
     if bundled_models_available:
@@ -98,9 +102,13 @@ def create_materials_app(home: str | Path | None = None) -> Flask:
     @app.errorhandler(RequestEntityTooLarge)
     def handle_request_too_large(_exc: RequestEntityTooLarge):
         workspace_id = (request.view_args or {}).get("workspace_id")
-        if request.endpoint == "import_receipts" and isinstance(workspace_id, str):
-            flash("本次导入的票据总大小过大，请分批导入。")
-            return _redirect_step(workspace_id, 2)
+        if isinstance(workspace_id, str):
+            if request.endpoint == "import_receipts":
+                flash("本次导入的票据总大小过大，请分批导入。")
+                return _redirect_step(workspace_id, 2)
+            if request.endpoint == "update_templates":
+                flash("模板文件总大小过大，请选择精简后的 .xlsx 文件。")
+                return _redirect_step(workspace_id, 1)
         flash("上传文件过大")
         return redirect(url_for("index"))
 
@@ -127,6 +135,22 @@ def create_materials_app(home: str | Path | None = None) -> Flask:
         )
         return redirect(url_for("wizard_step", workspace_id=workspace_dir.name, step=1))
 
+    @app.post("/workspace/<workspace_id>/rename")
+    def rename_workspace(workspace_id: str):
+        workspace_dir = _workspace_path(root, workspace_id)
+        state = load_workspace(workspace_dir)
+        name = request.form.get("name", "").strip()
+        if not name:
+            flash("工作区名称不能为空")
+            return redirect(url_for("index"))
+        if len(name) > MAX_WORKSPACE_NAME_LENGTH:
+            flash(f"工作区名称不能超过 {MAX_WORKSPACE_NAME_LENGTH} 个字符")
+            return redirect(url_for("index"))
+        state["name"] = name
+        save_workspace(workspace_dir, state)
+        flash(f"工作区已重命名为：{name}")
+        return redirect(url_for("index"))
+
     @app.post("/workspace/<workspace_id>/delete")
     def delete_workspace(workspace_id: str):
         workspace_dir = _workspace_path(root, workspace_id)
@@ -152,6 +176,13 @@ def create_materials_app(home: str | Path | None = None) -> Flask:
                 temporary_path = Path(temporary_file.name)
             upload.save(temporary_path)
             workspace_dir = restore_workspace_backup(root, temporary_path)
+            restored_state = load_workspace(workspace_dir)
+            if restored_state.get("template_mode") != "custom":
+                restored_state["template_dir"] = str(
+                    Path(app.config["MATERIALS_TEMPLATE_DIR"]).resolve()
+                )
+                restored_state["template_mode"] = "bundled"
+                save_workspace(workspace_dir, restored_state)
         except (OSError, ValueError) as exc:
             flash(f"恢复备份失败：{exc}")
             return redirect(url_for("index"))
@@ -193,12 +224,77 @@ def create_materials_app(home: str | Path | None = None) -> Flask:
             next_action=_wizard_guidance(state, step)[0],
             blocking_errors=_wizard_guidance(state, step)[1],
             workspace_name=state["name"],
+            template_mode=_active_template_mode(
+                state,
+                workspace_dir,
+                Path(app.config["MATERIALS_TEMPLATE_DIR"]),
+            ),
         )
 
     @app.post("/workspace/<workspace_id>/templates")
     def update_templates(workspace_id: str):
         workspace_dir = _workspace_path(root, workspace_id)
         state = load_workspace(workspace_dir)
+        template_mode = request.form.get("template_mode", "").strip()
+        if template_mode == "bundled":
+            bundled_templates = Path(app.config["MATERIALS_TEMPLATE_DIR"]).resolve()
+            validation = validate_template_directory(bundled_templates)
+            if not validation.valid:
+                for error in validation.errors:
+                    flash(f"内置模板不可用：{error}")
+                return _redirect_step(workspace_id, 1)
+            state["template_dir"] = str(bundled_templates)
+            state["template_mode"] = "bundled"
+            save_workspace(workspace_dir, state)
+            flash("已切换为内置模板")
+            return _redirect_step(workspace_id, 1)
+        if template_mode == "custom":
+            inbound_upload = request.files.get("inbound_template")
+            outbound_upload = request.files.get("outbound_template")
+            if (
+                inbound_upload is None
+                or not inbound_upload.filename
+                or outbound_upload is None
+                or not outbound_upload.filename
+            ):
+                flash("请同时选择入库单和出库单 .xlsx 模板")
+                return _redirect_step(workspace_id, 1)
+            uploads = (
+                ("入库单", inbound_upload, "inbound.xlsx"),
+                ("出库单", outbound_upload, "outbound.xlsx"),
+            )
+            for label, upload, _stored_name in uploads:
+                if Path(upload.filename).suffix.lower() != ".xlsx":
+                    flash(f"{label}模板必须是 .xlsx 文件")
+                    return _redirect_step(workspace_id, 1)
+            try:
+                with tempfile.TemporaryDirectory(
+                    dir=workspace_dir, prefix=".template-upload-"
+                ) as upload_directory:
+                    upload_dir = Path(upload_directory)
+                    saved_paths: dict[str, Path] = {}
+                    for label, upload, stored_name in uploads:
+                        saved_path = upload_dir / stored_name
+                        upload.save(saved_path)
+                        if saved_path.stat().st_size > app.config["MAX_TEMPLATE_BYTES"]:
+                            limit_mb = app.config["MAX_TEMPLATE_BYTES"] // (1024 * 1024)
+                            raise ValueError(f"{label}模板超过 {limit_mb} MB")
+                        saved_paths[label] = saved_path
+                    install_workspace_templates(
+                        workspace_dir,
+                        state,
+                        saved_paths["入库单"],
+                        saved_paths["出库单"],
+                    )
+            except ValueError as exc:
+                flash(f"自定义模板未启用：{exc}")
+                return _redirect_step(workspace_id, 1)
+            except OSError:
+                flash("自定义模板读取或保存失败，请检查文件和磁盘权限。")
+                return _redirect_step(workspace_id, 1)
+            flash("自定义模板校验通过，已复制到当前工作区")
+            return _redirect_step(workspace_id, 2)
+
         template_dir = request.form.get("template_dir", "").strip()
         try:
             validation = validate_template_directory(template_dir)
@@ -213,6 +309,7 @@ def create_materials_app(home: str | Path | None = None) -> Flask:
                 flash(f"模板无效：{error}")
             return _redirect_step(workspace_id, 1)
         state["template_dir"] = str(Path(template_dir).resolve())
+        state["template_mode"] = "external"
         state["ocr_provider"] = (
             "mock" if app.config["MATERIALS_OFFLINE_OCR"]
             else request.form.get("ocr_provider", "").strip() or state["ocr_provider"]
@@ -618,6 +715,22 @@ def _workspace_summaries(workspaces_dir: Path) -> list[dict[str, str]]:
             "error": "",
         })
     return summaries
+
+
+def _active_template_mode(state: dict, workspace_dir: Path, bundled_templates: Path) -> str:
+    """Return a display-only mode for current and pre-v1.3 workspaces."""
+    stored_mode = state.get("template_mode")
+    if stored_mode in {"bundled", "custom"}:
+        return stored_mode
+    try:
+        active = Path(state.get("template_dir", "")).resolve()
+        if active == bundled_templates.resolve():
+            return "bundled"
+        if active == (workspace_dir / "templates").resolve():
+            return "custom"
+    except (OSError, TypeError, ValueError):
+        pass
+    return "custom"
 
 
 def _workspace_path(root: Path, workspace_id: str) -> Path:

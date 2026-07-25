@@ -6,7 +6,10 @@
       <a class="step {% if loop.index == step %}active{% endif %}" href="{{ url_for('wizard_step', workspace_id=workspace_id, step=loop.index) }}">{{ loop.index }}. {{ title }}</a>
     {% endfor %}
   </nav>
-  <section class="card"><a class="button" href="{{ url_for('download_workspace_backup', workspace_id=workspace_id) }}">下载当前工作区备份</a></section>
+  <section class="card">
+    <a class="button secondary" href="{{ url_for('index') }}">返回工作区列表</a>
+    <a class="button" href="{{ url_for('download_workspace_backup', workspace_id=workspace_id) }}">下载当前工作区备份</a>
+  </section>
   <section class="card">
     <strong>下一步：</strong>{{ next_action }}
     {% if blocking_errors %}<ul>{% for error in blocking_errors %}<li>{{ error }}</li>{% endfor %}</ul>{% endif %}
@@ -14,9 +17,40 @@
 
   {% if step == 1 %}
     <section class="card">
-      <h2>已使用内嵌模板</h2>
-      <p>官方入库单和出库单已随程序提供，无需上传模板。请直接导入原始票据。</p>
-      <a class="button" href="{{ url_for('wizard_step', workspace_id=workspace_id, step=2) }}">导入票据</a>
+      <h2>选择模板</h2>
+      <p class="muted">内置模板适合本校现行格式；其他单位可导入字段结构兼容的入库单和出库单。</p>
+      <div class="template-options">
+        <article class="template-option {% if template_mode == 'bundled' %}active{% endif %}">
+          {% if template_mode == 'bundled' %}<span class="template-badge">当前使用</span>{% endif %}
+          <h3>内置模板</h3>
+          <p>程序自带并经过完整导出测试，无需选择文件。</p>
+          {% if template_mode == 'bundled' %}
+            <a class="button" href="{{ url_for('wizard_step', workspace_id=workspace_id, step=2) }}">继续导入票据</a>
+          {% else %}
+            <form method="post" action="{{ url_for('update_templates', workspace_id=workspace_id) }}">
+              <input type="hidden" name="template_mode" value="bundled">
+              <button type="submit">切换为内置模板</button>
+            </form>
+          {% endif %}
+        </article>
+        <article class="template-option {% if template_mode == 'custom' %}active{% endif %}">
+          {% if template_mode == 'custom' %}<span class="template-badge">当前使用</span>{% endif %}
+          <h3>兼容自定义模板</h3>
+          <p>分别选择两个 `.xlsx` 文件。校验通过后会复制到当前工作区，并随工作区备份保存。</p>
+          <form method="post" action="{{ url_for('update_templates', workspace_id=workspace_id) }}" enctype="multipart/form-data">
+            <input type="hidden" name="template_mode" value="custom">
+            <div class="template-upload-fields">
+              <label>入库单模板<input type="file" name="inbound_template" accept=".xlsx" required></label>
+              <label>出库单模板<input type="file" name="outbound_template" accept=".xlsx" required></label>
+            </div>
+            <button type="submit">{{ '替换自定义模板' if template_mode == 'custom' else '校验并使用' }}</button>
+          </form>
+          <details>
+            <summary>兼容要求</summary>
+            <p class="muted">模板可使用不同标题、校徽和样式，但必须保留规定的 10 列顺序、未合并的明细行、合计行、金额公式及大写金额公式。无效模板不会覆盖当前模板。</p>
+          </details>
+        </article>
+      </div>
     </section>
   {% elif step == 2 %}
     <section class="card">

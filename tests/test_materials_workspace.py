@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from core.materials_assistant import QuotaSlot, Receipt
 from core.inventory_line_extraction import RecognizedLineItem
@@ -18,6 +18,7 @@ from core.materials_workspace import (
     create_workspace,
     export_workspace_backup,
     export_quota_package,
+    install_workspace_templates,
     load_workspace,
     migrate_legacy_workspace,
     restore_workspace_backup,
@@ -185,6 +186,25 @@ class MaterialsWorkspaceTests(unittest.TestCase):
 
                 self.assertFalse(validation.valid)
                 self.assertTrue(any("入库单模板不可用" in error for error in validation.errors))
+
+    def test_template_validation_rejects_merged_cells_in_data_rows(self):
+        with TemporaryDirectory() as directory:
+            templates = Path(directory) / "templates"
+            templates.mkdir()
+            inbound = templates / "入库单模板.xlsx"
+            self._write_template(inbound)
+            workbook = load_workbook(inbound)
+            try:
+                workbook.active.merge_cells("B5:C5")
+                workbook.save(inbound)
+            finally:
+                workbook.close()
+            self._write_template(templates / "出库单模板.xlsx")
+
+            validation = validate_template_directory(templates)
+
+            self.assertFalse(validation.valid)
+            self.assertTrue(any("merged cells" in error for error in validation.errors))
 
     def test_template_validation_rejects_an_unreadable_workbook(self):
         with TemporaryDirectory() as directory:
@@ -769,6 +789,73 @@ class MaterialsWorkspaceTests(unittest.TestCase):
                         if not member.is_dir()
                     )
                 )
+
+    def test_workspace_templates_are_copied_and_restored_with_the_workspace(self):
+        with TemporaryDirectory() as directory, TemporaryDirectory() as restore_directory:
+            root = Path(directory)
+            workspace_dir, state = create_workspace(root, "Project Alpha", "bundled-templates")
+            source_templates = root / "source-templates"
+            source_templates.mkdir()
+            inbound = source_templates / "custom-inbound.xlsx"
+            outbound = source_templates / "custom-outbound.xlsx"
+            self._write_template(inbound, headers=[
+                "入库日期", "产品名称", "规格型号", "单位", "入库数量",
+                "单价(元)", "金额(元)", "供货单位", "经办人", "管理员",
+            ])
+            self._write_template(outbound, headers=[
+                "出库日期", "产品名称", "规格型号", "单位", "出库数量",
+                "单价(元)", "金额(元)", "用途", "领用人", "管理员",
+            ])
+
+            installed = install_workspace_templates(workspace_dir, state, inbound, outbound)
+            source_templates.rename(root / "moved-source-templates")
+            saved = load_workspace(workspace_dir)
+
+            self.assertEqual(installed, workspace_dir / "templates")
+            self.assertEqual(Path(saved["template_dir"]), installed)
+            self.assertTrue(validate_template_directory(installed).valid)
+
+            archive = export_workspace_backup(workspace_dir)
+            restored = restore_workspace_backup(restore_directory, archive)
+            restored_state = load_workspace(restored)
+
+            self.assertEqual(Path(restored_state["template_dir"]), restored / "templates")
+            self.assertTrue(validate_template_directory(restored_state["template_dir"]).valid)
+
+    def test_invalid_workspace_templates_do_not_replace_the_active_pair(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace_dir, state = create_workspace(root, "Project Alpha", "bundled-templates")
+            valid = root / "valid"
+            valid.mkdir()
+            valid_inbound = valid / "inbound.xlsx"
+            valid_outbound = valid / "outbound.xlsx"
+            self._write_template(valid_inbound, headers=[
+                "入库日期", "产品名称", "规格型号", "单位", "入库数量",
+                "单价(元)", "金额(元)", "供货单位", "经办人", "管理员",
+            ])
+            self._write_template(valid_outbound, headers=[
+                "出库日期", "产品名称", "规格型号", "单位", "出库数量",
+                "单价(元)", "金额(元)", "用途", "领用人", "管理员",
+            ])
+            installed = install_workspace_templates(
+                workspace_dir, state, valid_inbound, valid_outbound
+            )
+            original_inbound = (installed / "入库单.xlsx").read_bytes()
+            saved = load_workspace(workspace_dir)
+
+            invalid = root / "invalid.xlsx"
+            invalid.write_bytes(b"not an xlsx workbook")
+            with self.assertRaisesRegex(ValueError, "自定义模板不兼容"):
+                install_workspace_templates(
+                    workspace_dir, saved, invalid, valid_outbound
+                )
+
+            current = load_workspace(workspace_dir)
+            self.assertEqual(Path(current["template_dir"]), installed)
+            self.assertEqual((installed / "入库单.xlsx").read_bytes(), original_inbound)
+            self.assertFalse(list(workspace_dir.glob(".templates-*.staging")))
+            self.assertFalse(list(workspace_dir.glob(".templates-*.previous")))
 
     def test_export_workspace_backup_rejects_snapshots_restore_would_reject(self):
         with TemporaryDirectory() as directory:

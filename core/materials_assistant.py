@@ -877,7 +877,9 @@ def inspect_inventory_template(
             if is_inbound is not None else None
         )
         header_row = _find_header_row(sheet, expected_headers)
-        return header_row, _find_total_row(sheet, header_row)
+        total_row = _find_total_row(sheet, header_row)
+        _validate_writable_data_rows(sheet, header_row, total_row)
+        return header_row, total_row
     finally:
         workbook.close()
 
@@ -987,6 +989,18 @@ def _validate_total_row(sheet, header_row: int, total_row: int) -> None:
         and re.search(total_cell_reference, capitalized_total_formula, flags=re.IGNORECASE)
     ):
         raise ValueError("Template capitalized total formula must reference the total amount cell")
+
+
+def _validate_writable_data_rows(sheet, header_row: int, total_row: int) -> None:
+    if total_row <= header_row + 1:
+        raise ValueError("Template must provide at least one writable data row")
+    for merged_range in sheet.merged_cells.ranges:
+        intersects_data_rows = (
+            merged_range.max_row >= header_row + 1 and merged_range.min_row < total_row
+        )
+        intersects_inventory_columns = merged_range.max_col >= 1 and merged_range.min_col <= 10
+        if intersects_data_rows and intersects_inventory_columns:
+            raise ValueError("Template data rows A:J cannot contain merged cells")
 
 
 def _insert_styled_rows(sheet, insertion_row: int, amount: int, style_source_row: int) -> None:

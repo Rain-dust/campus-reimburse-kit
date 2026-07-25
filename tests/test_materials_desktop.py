@@ -205,6 +205,40 @@ class MaterialsDesktopTests(unittest.TestCase):
             self.assertFalse((root / "workspaces" / workspace_id).exists())
             self.assertIn("已删除工作区", response.get_data(as_text=True))
 
+    def test_workspace_can_be_renamed_without_changing_its_internal_id(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = create_materials_app(root).test_client()
+            workspace_id = self._new_workspace_id(client)
+            workspace_dir = root / "workspaces" / workspace_id
+
+            response = client.post(
+                f"/workspace/{workspace_id}/rename",
+                data={"name": "2027 大创材料"},
+                follow_redirects=True,
+            )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(workspace_dir.is_dir())
+            self.assertEqual(load_workspace(workspace_dir)["name"], "2027 大创材料")
+            self.assertIn("2027 大创材料", response.get_data(as_text=True))
+
+    def test_blank_workspace_name_is_rejected_without_changing_the_name(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = create_materials_app(root).test_client()
+            workspace_id = self._new_workspace_id(client)
+            workspace_dir = root / "workspaces" / workspace_id
+
+            response = client.post(
+                f"/workspace/{workspace_id}/rename",
+                data={"name": "   "},
+                follow_redirects=True,
+            )
+
+            self.assertEqual(load_workspace(workspace_dir)["name"], "Project Alpha")
+            self.assertIn("工作区名称不能为空", response.get_data(as_text=True))
+
     def test_index_shows_workspace_business_name_instead_of_internal_id(self):
         with TemporaryDirectory() as directory:
             client = create_materials_app(directory).test_client()
@@ -263,6 +297,94 @@ class MaterialsDesktopTests(unittest.TestCase):
             state = load_workspace(root / "workspaces" / workspace_id)
             self.assertEqual(state["template_dir"], str(templates.resolve()))
             self.assertEqual(client.get(f"/workspace/{workspace_id}/step/2").status_code, 200)
+
+    def test_custom_template_upload_copies_a_valid_pair_into_the_workspace(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            custom = root / "custom"
+            custom.mkdir()
+            inbound = custom / "学校入库单.xlsx"
+            outbound = custom / "学校出库单.xlsx"
+            self._write_template(inbound)
+            self._write_template(outbound)
+            client = create_materials_app(root).test_client()
+            workspace_id = self._new_workspace_id(client)
+            workspace_dir = root / "workspaces" / workspace_id
+
+            response = client.post(
+                f"/workspace/{workspace_id}/templates",
+                data={
+                    "template_mode": "custom",
+                    "inbound_template": (BytesIO(inbound.read_bytes()), inbound.name),
+                    "outbound_template": (BytesIO(outbound.read_bytes()), outbound.name),
+                },
+                content_type="multipart/form-data",
+            )
+            saved = load_workspace(workspace_dir)
+
+            self.assertEqual(response.status_code, 302)
+            self.assertTrue(response.headers["Location"].endswith("/step/2"))
+            self.assertEqual(Path(saved["template_dir"]), workspace_dir / "templates")
+            self.assertTrue((workspace_dir / "templates" / "入库单.xlsx").is_file())
+            self.assertTrue((workspace_dir / "templates" / "出库单.xlsx").is_file())
+
+    def test_invalid_custom_template_upload_keeps_the_bundled_templates(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = create_materials_app(root).test_client()
+            workspace_id = self._new_workspace_id(client)
+            workspace_dir = root / "workspaces" / workspace_id
+            original_template_dir = load_workspace(workspace_dir)["template_dir"]
+
+            response = client.post(
+                f"/workspace/{workspace_id}/templates",
+                data={
+                    "template_mode": "custom",
+                    "inbound_template": (BytesIO(b"not an xlsx"), "入库表.xlsx"),
+                    "outbound_template": (BytesIO(b"not an xlsx"), "出库表.xlsx"),
+                },
+                content_type="multipart/form-data",
+                follow_redirects=True,
+            )
+
+            self.assertEqual(load_workspace(workspace_dir)["template_dir"], original_template_dir)
+            self.assertIn("自定义模板未启用", response.get_data(as_text=True))
+            self.assertFalse((workspace_dir / "templates").exists())
+
+    def test_workspace_can_switch_from_custom_templates_back_to_bundled_templates(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            custom = root / "custom"
+            custom.mkdir()
+            inbound = custom / "入库单.xlsx"
+            outbound = custom / "出库单.xlsx"
+            self._write_template(inbound)
+            self._write_template(outbound)
+            app = create_materials_app(root)
+            client = app.test_client()
+            workspace_id = self._new_workspace_id(client)
+            workspace_dir = root / "workspaces" / workspace_id
+            client.post(
+                f"/workspace/{workspace_id}/templates",
+                data={
+                    "template_mode": "custom",
+                    "inbound_template": (BytesIO(inbound.read_bytes()), inbound.name),
+                    "outbound_template": (BytesIO(outbound.read_bytes()), outbound.name),
+                },
+                content_type="multipart/form-data",
+            )
+
+            response = client.post(
+                f"/workspace/{workspace_id}/templates",
+                data={"template_mode": "bundled"},
+            )
+
+            self.assertEqual(response.status_code, 302)
+            self.assertTrue(response.headers["Location"].endswith("/step/1"))
+            self.assertEqual(
+                load_workspace(workspace_dir)["template_dir"],
+                str(app.config["MATERIALS_TEMPLATE_DIR"]),
+            )
 
     def test_app_configures_bundled_ocr_assets_only_when_models_exist(self):
         with TemporaryDirectory() as directory:
@@ -386,7 +508,8 @@ class MaterialsDesktopTests(unittest.TestCase):
     def test_backup_download_and_restore_upload_open_a_new_workspace_at_step_one(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            client = create_materials_app(root).test_client()
+            app = create_materials_app(root)
+            client = app.test_client()
             workspace_id = self._new_workspace_id(client)
             workspace_dir = root / "workspaces" / workspace_id
             (workspace_dir / "imports" / "receipt.pdf").write_bytes(b"receipt")
@@ -407,7 +530,14 @@ class MaterialsDesktopTests(unittest.TestCase):
 
             self.assertEqual(restored.status_code, 302)
             self.assertRegex(restored.headers["Location"], r"/workspace/[^/]+/step/1$")
-            self.assertNotEqual(restored.headers["Location"].split("/")[2], workspace_id)
+            restored_id = restored.headers["Location"].split("/")[2]
+            self.assertNotEqual(restored_id, workspace_id)
+            restored_state = load_workspace(root / "workspaces" / restored_id)
+            self.assertEqual(
+                restored_state["template_dir"],
+                str(Path(app.config["MATERIALS_TEMPLATE_DIR"]).resolve()),
+            )
+            self.assertEqual(restored_state["template_mode"], "bundled")
 
     def test_restore_upload_flashes_error_for_archive_without_workspace_file(self):
         with TemporaryDirectory() as directory:

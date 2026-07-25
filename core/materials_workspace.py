@@ -32,6 +32,7 @@ from core.inventory_line_extraction import RecognizedLineItem
 
 SCHEMA_VERSION = 1
 WORKSPACE_FILENAME = "workspace.json"
+WORKSPACE_TEMPLATE_DIRECTORY = "templates"
 MAX_RESTORE_ENTRIES = 1000
 MAX_RESTORE_MEMBER_BYTES = 100 * 1024 * 1024
 MAX_RESTORE_TOTAL_BYTES = 250 * 1024 * 1024
@@ -231,6 +232,7 @@ def default_workspace_state(name: str = "", template_dir: str = "") -> dict[str,
         "schema_version": SCHEMA_VERSION,
         "name": str(name),
         "template_dir": str(template_dir),
+        "template_mode": "bundled",
         "ocr_provider": "",
         "step": "",
         "receipts": [],
@@ -253,6 +255,57 @@ def create_workspace(root: str | Path, name: str, template_dir: str = "") -> tup
     state = default_workspace_state(name, template_dir)
     save_workspace(workspace_dir, state)
     return workspace_dir, state
+
+
+def install_workspace_templates(
+    workspace_root: str | Path,
+    state: Mapping[str, Any],
+    inbound_template: str | Path,
+    outbound_template: str | Path,
+) -> Path:
+    """Validate and atomically activate a workspace-owned template pair."""
+    workspace_dir = Path(workspace_root).resolve()
+    target_dir = workspace_dir / WORKSPACE_TEMPLATE_DIRECTORY
+    operation_id = uuid4().hex
+    staging_dir = workspace_dir / f".templates-{operation_id}.staging"
+    previous_dir = workspace_dir / f".templates-{operation_id}.previous"
+    previous_moved = False
+    target_activated = False
+
+    try:
+        staging_dir.mkdir()
+        shutil.copy2(inbound_template, staging_dir / "入库单.xlsx")
+        shutil.copy2(outbound_template, staging_dir / "出库单.xlsx")
+        validation = validate_template_directory(staging_dir)
+        if not validation.valid:
+            raise ValueError(f"自定义模板不兼容：{'；'.join(validation.errors)}")
+
+        if target_dir.exists():
+            target_dir.rename(previous_dir)
+            previous_moved = True
+        try:
+            staging_dir.rename(target_dir)
+            target_activated = True
+            pending_state = deepcopy(state)
+            pending_state["template_dir"] = str(target_dir)
+            pending_state["template_mode"] = "custom"
+            save_workspace(workspace_dir, pending_state)
+        except Exception:
+            if target_activated:
+                shutil.rmtree(target_dir, ignore_errors=True)
+                target_activated = False
+            if previous_moved and previous_dir.exists():
+                previous_dir.rename(target_dir)
+                previous_moved = False
+            raise
+
+        if previous_dir.exists():
+            shutil.rmtree(previous_dir, ignore_errors=True)
+        return target_dir
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        if previous_dir.exists() and target_dir.exists():
+            shutil.rmtree(previous_dir, ignore_errors=True)
 
 
 def export_workspace_backup(workspace_root: str | Path) -> Path:
@@ -310,6 +363,7 @@ def restore_workspace_backup(home: str | Path, archive: str | Path) -> Path:
                     copied_bytes = _copy_backup_member(source, target, member.filename, copied_bytes)
             restored_state = load_workspace(staging_dir)
             _rewrite_restored_import_paths(restored_state, staging_dir, restored_dir)
+            _rewrite_restored_template_path(restored_state, staging_dir, restored_dir)
             save_workspace(staging_dir, restored_state)
             staging_dir.rename(restored_dir)
             restored = True
@@ -394,6 +448,19 @@ def _rewrite_restored_import_paths(
         receipt["source_path"] = str(
             restored_dir / "imports" / restored_source.relative_to(imports_dir)
         )
+
+
+def _rewrite_restored_template_path(
+    state: MutableMapping[str, Any], workspace_dir: Path, restored_dir: Path
+) -> None:
+    """Relocate a workspace-owned template pair after backup restoration."""
+    if state.get("template_mode") != "custom":
+        return
+    templates_dir = workspace_dir / WORKSPACE_TEMPLATE_DIRECTORY
+    validation = validate_template_directory(templates_dir)
+    if not validation.valid:
+        raise ValueError(f"Backup custom templates are invalid: {'; '.join(validation.errors)}")
+    state["template_dir"] = str(restored_dir / WORKSPACE_TEMPLATE_DIRECTORY)
 
 
 def _restored_import_path(imports_dir: Path, source_path: str) -> Path | None:
@@ -607,6 +674,10 @@ def _normalized_state(state: Any) -> dict[str, Any]:
     )
     defaults["step"] = _string(source.get("step"))
     defaults["ocr_provider"] = _string(source.get("ocr_provider"))
+    template_mode = _string(source.get("template_mode"))
+    defaults["template_mode"] = (
+        template_mode if template_mode in {"bundled", "custom", "external"} else "bundled"
+    )
     defaults["receipts"] = _normalized_records(source.get("receipts"), Receipt, _receipt_record)
     defaults["quotas"] = _normalized_records(source.get("quotas"), QuotaSlot, _quota_record)
     if isinstance(source.get("lines_by_slot"), Mapping):
